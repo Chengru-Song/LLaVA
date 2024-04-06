@@ -316,8 +316,9 @@ def preprocess_multimodal(
     for source in sources:
         for sentence in source:
             if DEFAULT_IMAGE_TOKEN in sentence['value']:
-                sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, '').strip()
-                sentence['value'] = DEFAULT_IMAGE_TOKEN + '\n' + sentence['value']
+                replace_token = DEFAULT_IMAGE_TOKEN + '\n'
+                sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, replace_token).strip()
+                # sentence['value'] = DEFAULT_IMAGE_TOKEN + '\n' + sentence['value']
                 sentence['value'] = sentence['value'].strip()
                 if "mmtag" in conversation_lib.default_conversation.version:
                     sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, '<Image>' + DEFAULT_IMAGE_TOKEN + '</Image>')
@@ -695,30 +696,33 @@ class LazySupervisedDataset(Dataset):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
         if 'image' in sources[0]:
-            image_file = self.list_data_dict[i]['image']
+            image_files = self.list_data_dict[i]['images']
             image_folder = self.data_args.image_folder
             processor = self.data_args.image_processor
-            image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
-            if self.data_args.image_aspect_ratio == 'pad':
-                def expand2square(pil_img, background_color):
-                    width, height = pil_img.size
-                    if width == height:
-                        return pil_img
-                    elif width > height:
-                        result = Image.new(pil_img.mode, (width, width), background_color)
-                        result.paste(pil_img, (0, (width - height) // 2))
-                        return result
-                    else:
-                        result = Image.new(pil_img.mode, (height, height), background_color)
-                        result.paste(pil_img, ((height - width) // 2, 0))
-                        return result
-                image = expand2square(image, tuple(int(x*255) for x in processor.image_mean))
-                image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            else:
-                image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            sources = preprocess_multimodal(
-                copy.deepcopy([e["conversations"] for e in sources]),
-                self.data_args)
+            images = []
+            for image in image_files:
+                image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
+                if self.data_args.image_aspect_ratio == 'pad':
+                    def expand2square(pil_img, background_color):
+                        width, height = pil_img.size
+                        if width == height:
+                            return pil_img
+                        elif width > height:
+                            result = Image.new(pil_img.mode, (width, width), background_color)
+                            result.paste(pil_img, (0, (width - height) // 2))
+                            return result
+                        else:
+                            result = Image.new(pil_img.mode, (height, height), background_color)
+                            result.paste(pil_img, ((height - width) // 2, 0))
+                            return result
+                    image = expand2square(image, tuple(int(x*255) for x in processor.image_mean))
+                    image = processor.preprocess(image, return_tensors='pt')['pixel_values']
+                else:
+                    image = processor.preprocess(image, return_tensors='pt')['pixel_values']
+                images.append(image)
+                sources = preprocess_multimodal(
+                    copy.deepcopy([e["conversations"] for e in sources]),
+                    self.data_args)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
         data_dict = preprocess(
@@ -730,12 +734,12 @@ class LazySupervisedDataset(Dataset):
                              labels=data_dict["labels"][0])
 
         # image exist in the data
-        if 'image' in self.list_data_dict[i]:
-            data_dict['image'] = image
+        if 'images' in self.list_data_dict[i]:
+            data_dict['images'] = images
         elif self.data_args.is_multimodal:
             # image does not exist in the data, but the model is multimodal
             crop_size = self.data_args.image_processor.crop_size
-            data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+            data_dict['images'] = [torch.zeros(3, crop_size['height'], crop_size['width'])]
         return data_dict
 
 
@@ -764,7 +768,7 @@ class DataCollatorForSupervisedDataset(object):
         )
 
         if 'image' in instances[0]:
-            images = [instance['image'] for instance in instances]
+            images = [instance['images'] for instance in instances]
             if all(x is not None and x.shape == images[0].shape for x in images):
                 batch['images'] = torch.stack(images)
             else:
