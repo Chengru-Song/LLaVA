@@ -34,13 +34,14 @@ class Conversation:
         if len(messages) > 0 and type(messages[0][1]) is tuple:
             messages = self.messages.copy()
             init_role, init_msg = messages[0].copy()
+            img_cnt = init_msg[0].count("<image>")
             init_msg = init_msg[0].replace("<image>", "").strip()
             if 'mmtag' in self.version:
                 messages[0] = (init_role, init_msg)
                 messages.insert(0, (self.roles[0], "<Image><image></Image>"))
                 messages.insert(1, (self.roles[1], "Received."))
             else:
-                messages[0] = (init_role, "<image>\n" + init_msg)
+                messages[0] = (init_role, "<image>\n"*img_cnt + init_msg)
 
         if self.sep_style == SeparatorStyle.SINGLE:
             ret = self.system + self.sep
