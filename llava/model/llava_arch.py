@@ -139,7 +139,8 @@ class LlavaMetaForCausalLM(ABC):
 
     def encode_images(self, images):
         image_features = self.get_model().get_vision_tower()(images)
-        image_features = self.get_model().mm_projector(image_features)
+        image_features = [self.get_model().mm_projector(image_feature) for image_feature in image_features]
+        # image_features = self.get_model().mm_projector(image_features)
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
@@ -149,7 +150,7 @@ class LlavaMetaForCausalLM(ABC):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
-
+        # concat_images = torch.concat([image for image in images], dim=0)
         image_features = self.encode_images(images)
         # if type(images) is list or images.ndim == 5:
         #     if type(images) is list:
@@ -258,13 +259,12 @@ class LlavaMetaForCausalLM(ABC):
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
                 if i < num_images:
-                    cur_image_features = image_features[cur_image_idx]
+                    cur_image_features = image_features[cur_image_idx][0]
                     cur_image_idx += 1
                     cur_new_input_embeds.append(cur_image_features)
                     cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
 
             cur_new_input_embeds = [x.to(self.device) for x in cur_new_input_embeds]
-
             cur_new_input_embeds = torch.cat(cur_new_input_embeds)
             cur_new_labels = torch.cat(cur_new_labels)
 

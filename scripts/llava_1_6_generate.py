@@ -9,11 +9,11 @@ from io import BytesIO
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import tokenizer_image_token, process_images, get_model_name_from_path
 from typing import Dict, Optional, Sequence, List
-from llava.llava.train.train import preprocess
+from llava.train.train import preprocess, preprocess_llama_2
 
 
 input_prompt_with_images = """
-<image> <image> <image> Please compose a story using the images.
+<image> <image> <image> Please describe the three images.
 """
 
 input_prompt = """
@@ -24,9 +24,9 @@ Please descript this image: <image>
 def load_image(image_file):
     if image_file.startswith('http') or image_file.startswith('https'):
         response = requests.get(image_file)
-        image = Image.open(BytesIO(response.content)).convert('RGB')
+        image = Image.open(BytesIO(response.content))
     else:
-        image = Image.open(image_file).convert('RGB')
+        image = Image.open(image_file)
     return image
 
 # def decode_text():
@@ -48,17 +48,19 @@ def llava_1_5_generate(prompt, images, image_processor, model, tokenizer):
     if len(images) != 0:
         image_data = [load_image(image) for image in images]
         image_tensors = process_images(image_data, image_processor, model.config)
+        print("image tensor shape: ", image_tensors.shape)
         # image_tensors = image_tensors.cuda().type(torch.bfloat16)
         image_tensors = [image_tensor.type(torch.bfloat16) for image_tensor in image_tensors]
         # print("image_tensor device: {}".format(image_tensors.device))
     
 
     # just one prompt
-    sources = [{"from": "human", "value": prompt}, {"from": 'gpt', "value": ""}]
-
-    input_ids = preprocess(sources, tokenizer, True)['input_ids']
+    sources = [[{"from": "human", "value": prompt}]]
+    sources = preprocess_multimodal(sources)
+    print("sources: ", sources)
+    input_ids = preprocess_llama_2(sources, tokenizer, True)['input_ids']
     input_ids = input_ids[0].unsqueeze(0).cuda()
-    # print(input_ids)
+    print(input_ids)
     output_ids = model.generate(
             inputs=input_ids,
             images=image_tensors,
@@ -67,7 +69,7 @@ def llava_1_5_generate(prompt, images, image_processor, model, tokenizer):
             top_p=0.9,
             max_new_tokens=4096,
         )
-    res_decode = model.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+    res_decode = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
         
     return res_decode
     
@@ -86,7 +88,9 @@ if __name__ == '__main__':
     tokenizer, model, image_processor, context_len = load_pretrained_model(
             args.pretrained_path, None, model_name, max_length=args.max_length,
             device_map="cuda", torch_dtype=torch.bfloat16, use_flash_attn=False)
-
-    res = llava_1_5_generate(input_prompt_with_images, ["tmp/IMG_1713.PNG", "tmp/cookie_1.jpg", "tmp/cookie_2.jpg"], coach.network.models.mllm)
+    print(model)
+    res = llava_1_5_generate(input_prompt_with_images, \
+        ["images/llava_example_cmp.png", "images/llava_logo.png", "images/llava_v1_5_radar.jpg"], \
+            image_processor, model, tokenizer)
     print(res)
     

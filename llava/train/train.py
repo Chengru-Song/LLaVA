@@ -335,7 +335,7 @@ def preprocess_llama_2(
     tokenizer: transformers.PreTrainedTokenizer,
     has_image: bool = False
 ) -> Dict:
-    conv = conversation_lib.default_conversation.copy()
+    conv = conversation_lib.conv_mistral_instruct.copy()
     roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
 
     # Apply prompt templates
@@ -453,6 +453,9 @@ def preprocess_v1(
 
     # Mask targets
     sep = conv.sep + conv.roles[1] + ": "
+    # print("sep: ", sep)
+    # print("conv sep: ", conv.sep2)
+    # print("conversations: ", conversations)
     for conversation, target in zip(conversations, targets):
         total_len = int(target.ne(tokenizer.pad_token_id).sum())
 
