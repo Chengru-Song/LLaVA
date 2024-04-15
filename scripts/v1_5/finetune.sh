@@ -2,12 +2,11 @@
 
 deepspeed llava/train/train_mem.py \
     --deepspeed ./scripts/zero3.json \
-    --model_name_or_path lmsys/vicuna-13b-v1.5 \
+    --model_name_or_path /mnt/bn/chengru-nas/models/llava-v1.6-mistral-7b \
     --version v1 \
-    --data_path ./playground/data/llava_v1_5_mix665k.json \
-    --image_folder ./playground/data \
-    --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_mm_mlp_adapter ./checkpoints/llava-v1.5-13b-pretrain/mm_projector.bin \
+    --data_path /mnt/bn/chengru-nas/train_data/llava/20240412/llava_projector_tune/train.json \
+    --vision_tower /mnt/bn/chengru-nas/models/clip-vit-large-patch14-336 \
+    --pretrain_mm_mlp_adapter /mnt/bn/chengru-nas/models/llava1_5/mm_projector.bin \
     --mm_projector_type mlp2x_gelu \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end False \
@@ -15,14 +14,14 @@ deepspeed llava/train/train_mem.py \
     --image_aspect_ratio pad \
     --group_by_modality_length True \
     --bf16 True \
-    --output_dir ./checkpoints/llava-v1.5-13b \
+    --output_dir /mnt/bn/chengru-nas/models/ckpts/llava_mistral/20240412/llava_projector_tune \
     --num_train_epochs 1 \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
-    --save_steps 50000 \
+    --save_steps 1000 \
     --save_total_limit 1 \
     --learning_rate 2e-5 \
     --weight_decay 0. \
@@ -30,8 +29,13 @@ deepspeed llava/train/train_mem.py \
     --lr_scheduler_type "cosine" \
     --logging_steps 1 \
     --tf32 True \
-    --model_max_length 2048 \
+    --model_max_length 8192 \
     --gradient_checkpointing True \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
-    --report_to wandb
+    --report_to wandb \
+    --nnodes $ARNOLD_WORKER_NUM \
+    --node_rank $ARNOLD_ID \
+    --nproc_per_node $ARNOLD_WORKER_GPU \
+    --master_addr $METIS_WORKER_0_HOST \
+    --master_port $port

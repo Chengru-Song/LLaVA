@@ -33,7 +33,7 @@ from llava.train.llava_trainer import LLaVATrainer
 
 from llava import conversation as conversation_lib
 from llava.model import *
-from llava.mm_utils import tokenizer_image_token
+from llava.mm_utils import tokenizer_image_token, load_image_from_base64, process_images
 
 from PIL import Image
 
@@ -699,33 +699,35 @@ class LazySupervisedDataset(Dataset):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
         if 'image' in sources[0]:
-            image_files = self.list_data_dict[i]['images']
-            image_folder = self.data_args.image_folder
+            image_b64 = self.list_data_dict[i]['images']
+            # image_folder = self.data_args.image_folder
             processor = self.data_args.image_processor
-            images = []
-            for image in image_files:
-                image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
-                if self.data_args.image_aspect_ratio == 'pad':
-                    def expand2square(pil_img, background_color):
-                        width, height = pil_img.size
-                        if width == height:
-                            return pil_img
-                        elif width > height:
-                            result = Image.new(pil_img.mode, (width, width), background_color)
-                            result.paste(pil_img, (0, (width - height) // 2))
-                            return result
-                        else:
-                            result = Image.new(pil_img.mode, (height, height), background_color)
-                            result.paste(pil_img, ((height - width) // 2, 0))
-                            return result
-                    image = expand2square(image, tuple(int(x*255) for x in processor.image_mean))
-                    image = processor.preprocess(image, return_tensors='pt')['pixel_values']
-                else:
-                    image = processor.preprocess(image, return_tensors='pt')['pixel_values']
-                images.append(image)
-                sources = preprocess_multimodal(
-                    copy.deepcopy([e["conversations"] for e in sources]),
-                    self.data_args)
+            images = [load_image_from_base64 for image in image_b64]
+            images = process_images(images)
+            # for image in image_files:
+            #     # image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
+            #     image = load_image_from_base64(image)
+            #     if self.data_args.image_aspect_ratio == 'pad':
+            #         def expand2square(pil_img, background_color):
+            #             width, height = pil_img.size
+            #             if width == height:
+            #                 return pil_img
+            #             elif width > height:
+            #                 result = Image.new(pil_img.mode, (width, width), background_color)
+            #                 result.paste(pil_img, (0, (width - height) // 2))
+            #                 return result
+            #             else:
+            #                 result = Image.new(pil_img.mode, (height, height), background_color)
+            #                 result.paste(pil_img, ((height - width) // 2, 0))
+            #                 return result
+            #         image = expand2square(image, tuple(int(x*255) for x in processor.image_mean))
+            #         image = processor.preprocess(image, return_tensors='pt')['pixel_values']
+            #     else:
+            #         image = processor.preprocess(image, return_tensors='pt')['pixel_values']
+            #     images.append(image)
+            #     sources = preprocess_multimodal(
+            #         copy.deepcopy([e["conversations"] for e in sources]),
+            #         self.data_args)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
         data_dict = preprocess(
