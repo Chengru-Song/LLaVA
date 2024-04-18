@@ -34,12 +34,14 @@ from llava.train.llava_trainer import LLaVATrainer
 from llava import conversation as conversation_lib
 from llava.model import *
 from llava.mm_utils import tokenizer_image_token, load_image_from_base64, process_images
+from llava.model.language_model.llava_mistral import LlavaMistralForCausalLM
+from transformers import CLIPImageProcessor, AutoTokenizer
 
 from PIL import Image
 
 
 local_rank = None
-
+os.environ["WANDB_DISABLED"] = "true"
 
 def rank0_print(*args):
     if local_rank == 0:
@@ -313,6 +315,19 @@ def preprocess_multimodal(
     if not is_multimodal:
         return sources
 
+    # for source in sources:
+    #     for sentence in source:
+    #         if DEFAULT_IMAGE_TOKEN in sentence['value']:
+    #             replace_token = DEFAULT_IMAGE_TOKEN + '\n'
+    #             sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, replace_token).strip()
+    #             # sentence['value'] = DEFAULT_IMAGE_TOKEN + '\n' + sentence['value']
+    #             sentence['value'] = sentence['value'].strip()
+    #             if "mmtag" in conversation_lib.default_conversation.version:
+    #                 sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, '<Image>' + DEFAULT_IMAGE_TOKEN + '</Image>')
+    #         replace_token = DEFAULT_IMAGE_TOKEN
+    #         if data_args.mm_use_im_start_end:
+    #             replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
+    #         sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
     for source in sources:
         for sentence in source:
             if DEFAULT_IMAGE_TOKEN in sentence['value']:
@@ -320,13 +335,6 @@ def preprocess_multimodal(
                 sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, replace_token).strip()
                 # sentence['value'] = DEFAULT_IMAGE_TOKEN + '\n' + sentence['value']
                 sentence['value'] = sentence['value'].strip()
-                if "mmtag" in conversation_lib.default_conversation.version:
-                    sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, '<Image>' + DEFAULT_IMAGE_TOKEN + '</Image>')
-            replace_token = DEFAULT_IMAGE_TOKEN
-            if data_args.mm_use_im_start_end:
-                replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
-            sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
-
     return sources
 
 
@@ -698,13 +706,24 @@ class LazySupervisedDataset(Dataset):
         if isinstance(i, int):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
-        if 'image' in sources[0]:
+        # print("sources: {}".format(sources[0]))
+        # sources = [sources]
+        # print("sources len: ", len(sources))
+        # for source in sources:
+        #     print(source.keys())
+        # try:
+        #     [e["conversations"] for e in sources]
+        #     print(type(sources[0]))
+        #     print("success")
+        # except Exception as e:
+        #     print("source len: ", len(sources))
+        #     print(e)
+        if 'images' in sources[0]:
             image_b64 = self.list_data_dict[i]['images']
             # image_folder = self.data_args.image_folder
-            processor = self.data_args.image_processor
-            images = [load_image_from_base64 for image in image_b64]
-            images = process_images(images)
-            # for image in image_files:
+            images = [load_image_from_base64(image) for image in image_b64]
+            images = process_images(images, self.data_args.image_processor, self.data_args.model_cfg)
+            for image in images:
             #     # image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
             #     image = load_image_from_base64(image)
             #     if self.data_args.image_aspect_ratio == 'pad':
@@ -725,15 +744,21 @@ class LazySupervisedDataset(Dataset):
             #     else:
             #         image = processor.preprocess(image, return_tensors='pt')['pixel_values']
             #     images.append(image)
-            #     sources = preprocess_multimodal(
-            #         copy.deepcopy([e["conversations"] for e in sources]),
-            #         self.data_args)
+                prepare_list = []
+                for e in sources:
+                    if isinstance(e, dict):
+                        prepare_list.append(e["conversations"])
+                    else:
+                        prepare_list.append(e)
+                sources = preprocess_multimodal(
+                            prepare_list,
+                            self.data_args)
         else:
-            sources = copy.deepcopy([e["conversations"] for e in sources])
+            sources = copy.deepcopy([e["conversations"] for e in sources[0]])
         data_dict = preprocess(
             sources,
             self.tokenizer,
-            has_image=('image' in self.list_data_dict[i]))
+            has_image=('images' in self.list_data_dict[i]))
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
                              labels=data_dict["labels"][0])
@@ -772,12 +797,13 @@ class DataCollatorForSupervisedDataset(object):
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
 
-        if 'image' in instances[0]:
+        if 'images' in instances[0]:
             images = [instance['images'] for instance in instances]
             if all(x is not None and x.shape == images[0].shape for x in images):
                 batch['images'] = torch.stack(images)
             else:
                 batch['images'] = images
+            batch["images"] = torch.stack([image_tensor.type(torch.bfloat16) for image_tensor in images], dim=0)
 
         return batch
 
@@ -833,7 +859,7 @@ def train(attn_implementation=None):
                 **bnb_model_from_pretrained_args
             )
         else:
-            model = LlavaLlamaForCausalLM.from_pretrained(
+            model = LlavaMistralForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
                 cache_dir=training_args.cache_dir,
                 attn_implementation=attn_implementation,
@@ -884,37 +910,40 @@ def train(attn_implementation=None):
         rank0_print("Adding LoRA adapters...")
         model = get_peft_model(model, lora_config)
 
-    if 'mpt' in model_args.model_name_or_path:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            model_max_length=training_args.model_max_length,
-            padding_side="right"
-        )
-    else:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            model_max_length=training_args.model_max_length,
-            padding_side="right",
-            use_fast=False,
-        )
+    # if 'mpt' in model_args.model_name_or_path:
+    #     tokenizer = transformers.AutoTokenizer.from_pretrained(
+    #         model_args.model_name_or_path,
+    #         cache_dir=training_args.cache_dir,
+    #         model_max_length=training_args.model_max_length,
+    #         padding_side="right"
+    #     )
+    # else:
+    #     tokenizer = transformers.AutoTokenizer.from_pretrained(
+    #         model_args.model_name_or_path,
+    #         cache_dir=training_args.cache_dir,
+    #         model_max_length=training_args.model_max_length,
+    #         padding_side="right",
+    #         use_fast=False,
+    #     )
 
-    if model_args.version == "v0":
-        if tokenizer.pad_token is None:
-            smart_tokenizer_and_embedding_resize(
-                special_tokens_dict=dict(pad_token="[PAD]"),
-                tokenizer=tokenizer,
-                model=model,
-            )
-    elif model_args.version == "v0.5":
-        tokenizer.pad_token = tokenizer.unk_token
-    else:
-        tokenizer.pad_token = tokenizer.unk_token
-        if model_args.version in conversation_lib.conv_templates:
-            conversation_lib.default_conversation = conversation_lib.conv_templates[model_args.version]
-        else:
-            conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
+    # if model_args.version == "v0":
+    #     if tokenizer.pad_token is None:
+    #         smart_tokenizer_and_embedding_resize(
+    #             special_tokens_dict=dict(pad_token="[PAD]"),
+    #             tokenizer=tokenizer,
+    #             model=model,
+    #         )
+    # elif model_args.version == "v0.5":
+    #     tokenizer.pad_token = tokenizer.unk_token
+    # else:
+    #     tokenizer.pad_token = tokenizer.unk_token
+    #     # print("pad_token: ", tokenizer.pad_token)
+    #     if model_args.version in conversation_lib.conv_templates:
+    #         conversation_lib.default_conversation = conversation_lib.conv_templates["llama_2"]
+    #     else:
+    #         conversation_lib.default_conversation = conversation_lib.conv_templates["mistral_instruct"]
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    conversation_lib.default_conversation = conversation_lib.conv_templates["mistral_instruct"]
 
     if model_args.vision_tower is not None:
         model.get_model().initialize_vision_modules(
@@ -927,6 +956,7 @@ def train(attn_implementation=None):
 
         data_args.image_processor = vision_tower.image_processor
         data_args.is_multimodal = True
+        data_args.model_cfg = model.config
 
         model.config.image_aspect_ratio = data_args.image_aspect_ratio
         model.config.tokenizer_padding_side = tokenizer.padding_side

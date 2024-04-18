@@ -32,10 +32,4 @@ deepspeed llava/train/train_mem.py \
     --model_max_length 8192 \
     --gradient_checkpointing True \
     --dataloader_num_workers 4 \
-    --lazy_preprocess True \
-    --report_to wandb \
-    --nnodes $ARNOLD_WORKER_NUM \
-    --node_rank $ARNOLD_ID \
-    --nproc_per_node $ARNOLD_WORKER_GPU \
-    --master_addr $METIS_WORKER_0_HOST \
-    --master_port $port
+    --lazy_preprocess True

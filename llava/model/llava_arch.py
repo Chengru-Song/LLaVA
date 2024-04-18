@@ -138,8 +138,21 @@ class LlavaMetaForCausalLM(ABC):
         return self.get_model().get_vision_tower()
 
     def encode_images(self, images):
-        image_features = self.get_model().get_vision_tower()(images)
-        image_features = [self.get_model().mm_projector(image_feature) for image_feature in image_features]
+        # for none batch input
+        if (isinstance(images, list) and images[0].ndim == 3) or images.ndim == 4:
+            image_features = self.get_model().get_vision_tower()(images)
+            image_features = [self.get_model().mm_projector(image_feature) for image_feature in image_features]
+        else:
+            image_features = [self.get_model().get_vision_tower()(image) for image in images]
+            res_features = []
+            for image_feature in image_features:
+                temp_features = []
+                for temp_feature in image_feature:
+                    temp_features.append(self.get_model().mm_projector(temp_feature))
+                temp_features = torch.stack(temp_features, dim=0)
+                res_features.append(temp_features)
+            image_features = torch.stack(res_features, dim=0)
+            
         # image_features = self.get_model().mm_projector(image_features)
         return image_features
 
@@ -151,7 +164,7 @@ class LlavaMetaForCausalLM(ABC):
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
         # concat_images = torch.concat([image for image in images], dim=0)
-        image_features = self.encode_images(images)
+        image_features_batch = self.encode_images(images)
         # if type(images) is list or images.ndim == 5:
         #     if type(images) is list:
         #         images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
@@ -231,7 +244,7 @@ class LlavaMetaForCausalLM(ABC):
         new_input_embeds = []
         new_labels = []
         cur_image_idx = 0
-        for batch_idx, cur_input_ids in enumerate(input_ids):
+        for batch_idx, (cur_input_ids, image_features) in enumerate(zip(input_ids, image_features_batch)):
             num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx]
@@ -259,7 +272,7 @@ class LlavaMetaForCausalLM(ABC):
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
                 if i < num_images:
-                    cur_image_features = image_features[cur_image_idx][0]
+                    cur_image_features = image_features[cur_image_idx]
                     cur_image_idx += 1
                     cur_new_input_embeds.append(cur_image_features)
                     cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
